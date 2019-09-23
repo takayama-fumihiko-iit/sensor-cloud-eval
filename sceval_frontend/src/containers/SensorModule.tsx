@@ -1,4 +1,4 @@
-import React, { useEffect, useState, Fragment, useContext } from 'react';
+import React, { useEffect, useState, Fragment, useContext, useReducer } from 'react';
 import { NavLink, withRouter, RouteComponentProps, Redirect } from 'react-router-dom';
 import AppContext from '../controllers/AppContext';
 import { AmChart } from '../components/AmChart';
@@ -63,29 +63,153 @@ interface SensorModuleSettings {
     sensors: SensorTypeSetting[];
 }
 
+interface LoadHomeAction {
+    type: 'LOAD_HOME';
+}
+
+interface LoadHomeResultAction {
+    type: 'LOAD_HOME_RESULT';
+    result: Home;
+}
+
+interface LoadHomeErrorAction {
+    type: 'LOAD_HOME_ERROR';
+    error: ErrorResponse;
+}
+
+interface LoadSensorModuleAction {
+    type: 'LOAD_SENSOR_MODULE';
+}
+
+interface LoadSensorModuleResultAction {
+    type: 'LOAD_SENSOR_MODULE_RESULT';
+    data: SensorModuleInterface;
+}
+
+interface LoadSensorModuleErrorAction {
+    type: 'LOAD_SENSOR_MODULE_ERROR';
+    error: ErrorResponse;
+}
+
+interface ShowModuleSettingAction {
+    type: 'SHOW_MODULE_SETTING';
+}
+
+interface HideModuleSettingAction {
+    type: 'HIDE_MODULE_SETTING';
+}
+
+interface SensorModuleStates {
+    home?: Home;
+    gatewayId: number;
+    sensorModule?: SensorModuleInterface;
+    isLoadingPage?: boolean;
+    isLoadingTSData?: boolean;
+    editingModuleSettings?: boolean;
+}
+
+function sensorModuleStateReducer (
+    state: SensorModuleStates,
+    action: LoadHomeAction | LoadHomeResultAction | LoadHomeErrorAction |
+            LoadSensorModuleAction | LoadSensorModuleResultAction | LoadSensorModuleErrorAction |
+            ShowModuleSettingAction | HideModuleSettingAction
+): SensorModuleStates {
+
+    switch (action.type) {
+        case 'LOAD_HOME':
+            return {
+                ...state,
+                isLoadingPage: true,
+            };
+        case 'LOAD_HOME_RESULT':
+            return {
+                ...state,
+                home: (action as LoadHomeResultAction).result,
+                isLoadingPage: false,
+            };
+        case 'LOAD_HOME_ERROR':
+            return {
+                ...state,
+                isLoadingPage: false
+            };
+        case 'LOAD_SENSOR_MODULE':
+            return {
+                ...state,
+                isLoadingPage: true
+            };
+        case 'LOAD_SENSOR_MODULE_RESULT':
+            return {
+                ...state,
+                sensorModule: (action as LoadSensorModuleResultAction).data,
+                isLoadingPage: false
+            };
+        case 'LOAD_SENSOR_MODULE_ERROR':
+            return {
+                ...state,
+                isLoadingPage: false
+            };
+        case 'SHOW_MODULE_SETTING':
+            return {
+                ...state,
+                editingModuleSettings: true,
+            };
+        case 'HIDE_MODULE_SETTING':
+            return {
+                ...state,
+                editingModuleSettings: false,
+            };
+        
+        default:
+            console.error(`Action not supported '${action}'`);
+    }
+    return state;
+}
+
+interface SetChartTimespanOptionsAction {
+    type: 'SET_CHART_TIMESNAP_OPTIONS';
+    options: GraphTimespan[];
+}
+
+interface SetChartZoonAction {
+    type: 'SET_CHART_ZOOM';
+    zoom: DateBounds;
+}
+
+interface FillChartAction {
+    type: 'FILL_CHART';
+}
+
+interface UnfillChartAction {
+    type: 'UNFILL_CHART';
+}
+
+interface ShowChartBulletsAction {
+    type: 'SHOW_BULLET';
+}
+
+interface HideChartBulletAction {
+    type: 'HIDE_BULLET';
+}
+
+interface ChartStates {
+    graphTimespanOptions: GraphTimespan[];
+    zoom: DateBounds;
+    fillChart: boolean;
+    showBullets: boolean;
+}
+
 export const SensorModule = withRouter((props: SensorModuleProps & RouteComponentProps<RouteParams>) => {
-    // home state
-    const [home, setHome] = useState<Home>();
-    // selected module state
-    const [selectedModule, setSelectedModule] = useState<string|null>();
-    // sensor module data object state
-    const [selectedSensorModuleObj, setSelectedSensorModuleObj] = useState<SensorModuleInterface|null>();
-    // selected gateway state
-    const [selectedGateway, setSelectedGateway] = useState<number>(0);
-    // state to show that the page is loading so the user doesn't think it frozen
-    const [isLoadingPage, setIsLoadingPage] = useState<boolean>(true);
-    // state to show that we are loading chart data
-    const [isLoadingTSData, setIsLoadingTSData] = useState<boolean>(true);
+    const [sensorModuleStates, dispatch] = useReducer(sensorModuleStateReducer, {
+        gatewayId: Number(props.match.params.deviceId),
+        isLoadingPage: false,
+        isLoadingTSData: false,
+        editingModuleSettings: false
+    });
+
     // The complete list of ALL the sensor information including the inactive sensors
     const [allSensorBundles, setAllSensorBundles] = useState<SensorDataBundle[]>([]);
     // The list of active sensors
     const [activeSensorBundles, setActiveSensorBundles] = useState<SensorDataBundle[]>([]);
-    // sensor module settings modal display state
-    const [settingsModalVisible, setSettingsModalVisible] = useState<boolean>(false);
-    // editing sensor module settings state
-    const [editingModuleSettings, setEditingModuleSettings] = useState<boolean>(false);
-    // declaration of a useContext hook
-    const sensorContext: Context = useContext(context);
     // The min/max date bounds of all the sensor time series
     const [masterDateBounds, setMasterDateBounds] = useState<DateBounds>();
     // The current zoom bounds
@@ -133,13 +257,12 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
         dateBounds: DateBounds | null | undefined,
         insertToSnapshotData: boolean = true): Promise<void> => {
 
-        if (!home || !dateBounds) {
+        if (!sensorModuleStates.home || !dateBounds) {
             consoleLog('Fetch details data canceled');
             return;
         }
 
         consoleLog('Fetch details data');
-        setIsLoadingTSData(true);
         
         let updatedBundles: SensorDataBundle[] | null = null;
 
@@ -170,7 +293,10 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
                          dateBounds.endTime !== sensorBundle.currentDateBounds.endTime) {
                             try {
                                 timeSeriesDataArray.push(await modeAPI.getTimeSeriesData(
-                                    home.id, sensorBundle.seriesId, dateBounds.beginDate, dateBounds.endDate
+                                    sensorModuleStates.home.id,
+                                    sensorBundle.seriesId,
+                                    dateBounds.beginDate,
+                                    dateBounds.endDate
                                 ));
                             } catch (error) {
                                 consoleLog('Failed to load time series data for series id: ', sensorBundle.seriesId);
@@ -253,8 +379,6 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
                     return sensorBundle.active;
                 }));
             }
-
-            setIsLoadingTSData(false);
         }
     };
 
@@ -351,17 +475,11 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
         // load module data
         const sensorModuleData: SensorModuleInterface = await modeAPI.getDeviceKeyValueStore(
             gateway, `${Constants.SENSOR_MODULE_KEY_PREFIX}${sensorModuleId}`);
-
-        setHome(userHome);
-        setSelectedGateway(gateway);
-        setSelectedModule(props.match.params.sensorModuleId);
-        setSelectedSensorModuleObj(sensorModuleData);
     };
 
     const initializeTimeSeries = async (
         userHome: Home,
         gateway: number,
-        sensorModuleId: string,
         sensorModuleObj: SensorModuleInterface) => {
         
         // this is the complete list of the sensor type this sensor module has, including disabled sensors
@@ -400,7 +518,7 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
                     // 0101:28a183311676-acceleration_y:0
                     // So to find out which series belong to this sensor module, we need to check if the
                     // series.id contain sensor module id
-                    return series.id.includes(sensorModuleId);
+                    return series.id.includes(sensorModuleObj.value.id);
                 }
             );
         } catch (error) {
@@ -669,10 +787,46 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
         );
     }
 
+    useEffect(() => {
+
+        (async (): Promise<void> => {
+            // restore login
+            await AppContext.restoreLogin();
+
+            dispatch({type: 'LOAD_HOME'});
+
+            // open new connection for refresh
+            ModeConnection.openConnection();
+
+            // Load home data
+            try {
+                const userHome: Home = await modeAPI.getHome(ClientStorage.getItem('user-login').user.id);
+                dispatch({type: 'LOAD_HOME_RESULT', result: userHome});
+            } catch (error) {
+                dispatch({type: 'LOAD_HOME_ERROR', error: error});
+            }
+
+            // load module data
+            dispatch({type: 'LOAD_SENSOR_MODULE'});
+
+            try {
+                const sensorModuleData: SensorModuleInterface = await modeAPI.getDeviceKeyValueStore(
+                    Number(props.match.params.deviceId),
+                    `${Constants.SENSOR_MODULE_KEY_PREFIX}${props.match.params.sensorModuleId}`
+                );
+                dispatch({type: 'LOAD_SENSOR_MODULE_RESULT', data: sensorModuleData});
+            } catch (error) {
+                dispatch({type: 'LOAD_SENSOR_MODULE_ERROR', error: error});
+            }
+
+        })();
+    },        [props.match.params.deviceId, props.match.params.sensorModuleId]);
+
     /**
      * This useEffect does not depend on any state so it will only get called once, when the component is mounted
      * We use this to load the neccessary data which the page depends on
      */
+    /*
     useEffect(
         () => {
             if (props.match.params.deviceId && props.match.params.sensorModuleId) {
@@ -687,6 +841,7 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
                 });
             }
     },  [props.match.params.deviceId, props.match.params.sensorModuleId]);
+    */
 
     /**
      * This useEffected is used for loading time series data. This depends on the selectedGateway, selectedModule, etc.
@@ -694,18 +849,19 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
      */
     useEffect(
         () => {
-            if (home && selectedGateway && selectedModule && selectedSensorModuleObj) {
-                setIsLoadingTSData(true);
-
-                initializeTimeSeries(home, selectedGateway, selectedModule, selectedSensorModuleObj).then(() => {
-                    setIsLoadingTSData(false);
+            if (sensorModuleStates.home && sensorModuleStates.gatewayId && sensorModuleStates.sensorModule) {
+                initializeTimeSeries(
+                    sensorModuleStates.home,
+                    sensorModuleStates.gatewayId,
+                    sensorModuleStates.sensorModule
+                ).then(() => {
+                    // do nothing
                 }).catch((error: ErrorResponse): void => {
                     // Failed initialize timeseries
                     consoleLog('Initialize time series failed');
-                    setIsLoadingTSData(false);
                 });
             }
-    },  [home, selectedGateway, selectedModule, selectedSensorModuleObj]);
+    },  [sensorModuleStates.home, sensorModuleStates.gatewayId, sensorModuleStates.sensorModule]);
 
     // React hook's componentDidMount and componentDidUpdate
     useEffect(
@@ -721,7 +877,7 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
 
                     // if app receives real time data, and it pertains to the selected Module:
                     if (message.eventType === Constants.EVENT_REALTIME_DATA &&
-                        home && allSensorBundles &&
+                        sensorModuleStates.home && allSensorBundles &&
                         message.eventData && message.eventData.timeSeriesData &&
                         message.eventData.timeSeriesData.length > 0) {
                         
@@ -767,7 +923,7 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
                 ModeConnection.removeObserver(webSocketMessageHandler);
             };
     // method invoke dependencies
-    },  [home, selectedGateway, selectedModule, allSensorBundles]);
+    },  [sensorModuleStates.home, sensorModuleStates.gatewayId, sensorModuleStates.sensorModule, allSensorBundles]);
 
     const onUserInteractingWithChartHandler = (targetId: string): void => {
         // cancle debounce if there is one
@@ -852,8 +1008,8 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
      * @param event 
      */
     const handleSaveSensorModuleSettings = async (event: any) => {
-        if (selectedSensorModuleObj && sensorModuleSettings) {
-            const updatedSensorModuleObject: SensorModuleInterface = Object.assign({}, selectedSensorModuleObj);
+        if (sensorModuleStates.sensorModule && sensorModuleSettings) {
+            const updatedSensorModuleObject: SensorModuleInterface = Object.assign({}, sensorModuleStates.sensorModule);
 
             // If the name changed, update the name
             let nameChanged: boolean = false;
@@ -902,12 +1058,12 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
                 // update KV store for the device
                 try {
                     const status: number = await modeAPI.setDeviceKeyValueStore(
-                        selectedGateway,
+                        sensorModuleStates.gatewayId,
                         updatedSensorModuleObject.key,
                         updatedSensorModuleObject
                     );
-                    setSelectedSensorModuleObj(updatedSensorModuleObject);
-                    setSettingsModalVisible(false);
+                    // TODO - Bill Fix this
+                    // setSelectedSensorModuleObj(updatedSensorModuleObject);
 
                     // update the active and inactive sensor bundles
                     if (sensorListChanged) {
@@ -926,7 +1082,7 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
                 
                         // Update the sensor module settings state
                         setSensorModuleSettings({
-                            name: selectedSensorModuleObj.value.name,
+                            name: sensorModuleStates.sensorModule.value.name,
                             sensors: updatedAllSensorBundles.map(
                                 (sensorBundle: SensorDataBundle): SensorTypeSetting => {
                                 return {
@@ -945,6 +1101,8 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
                     console.error(error);
                 }
             }
+
+            dispatch({type: 'HIDE_MODULE_SETTING'});
         }
     };
 
@@ -998,7 +1156,9 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
             >
                 <option 
                     onClick={() => {
-                        setSettingsModalVisible(true);
+                        dispatch({
+                            type: 'SHOW_MODULE_SETTING'
+                        });
                     }}
                 >
                 Sensor Module Settings
@@ -1021,15 +1181,16 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
     };
 
     useEffect(() => {
-        if (masterDateBounds && selectedSensorModuleObj) {
+        if (masterDateBounds && sensorModuleStates.sensorModule) {
             if (realtimeMode) {
                 // Load time series data for the last X seconds. X seconds will depends on the module's sensing
                 // interval. We don't want to show too many points or too few points therefore we need to make it based
                 // on sensing interval. For example: If the sensing interval is 5 seconds and we show 1 hours, it
                 // would show too many points, 720 points. And if the sensing interval is 30 minutes, show 1 hours of
                 // data would be too little.
-                const interval: number = selectedSensorModuleObj && selectedSensorModuleObj.value.interval ?
-                    selectedSensorModuleObj.value.interval : 5;
+                const interval: number =
+                    sensorModuleStates.sensorModule && sensorModuleStates.sensorModule.value.interval ?
+                        sensorModuleStates.sensorModule.value.interval : 5;
 
                 // Calculate what the range of the data is base on the number of points we want to show and the interval
                 const range: number = interval * Constants.REALTIME_CHART_MAX_DATA_POINTS * 1000;
@@ -1063,8 +1224,8 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
             // on sensing interval. For example: If the sensing interval is 5 seconds and we show 1 hours, it
             // would show too many points, 720 points. And if the sensing interval is 30 minutes, show 1 hours of
             // data would be too little.
-            const interval: number = selectedSensorModuleObj && selectedSensorModuleObj.value.interval ?
-                selectedSensorModuleObj.value.interval : 5;
+            const interval: number = sensorModuleStates.sensorModule && sensorModuleStates.sensorModule.value.interval ?
+            sensorModuleStates.sensorModule.value.interval : 5;
 
             // Calculate what the range of the data is based on the number of points we want to show and the interval
             const range: number = interval * Constants.REALTIME_CHART_MAX_DATA_POINTS * 1000;
@@ -1137,20 +1298,21 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
      */
     const setSensingInterval = 
         (sensorModuleObj: SensorModuleInterface | null | undefined, interval: SensingInterval): void => {
-        if (selectedGateway && sensorModuleObj && interval && interval.value > 0 &&
+        if (sensorModuleStates.gatewayId && sensorModuleObj && interval && interval.value > 0 &&
             sensorModuleObj.value.interval !== (interval.value * interval.multiplier)) {
 
             const updatedSensorModuleObj: SensorModuleInterface = Object.assign({}, sensorModuleObj);
             updatedSensorModuleObj.value.interval = interval.value * interval.multiplier;
-            modeAPI.setDeviceKeyValueStore(selectedGateway, sensorModuleObj.key, updatedSensorModuleObj).then(
-                (status: number): void => {
+            modeAPI.setDeviceKeyValueStore(sensorModuleStates.gatewayId, sensorModuleObj.key, updatedSensorModuleObj)
+            .then((status: number): void => {
                 if (componentUnmounted) {
                     return;
                 }
 
                 // now update the state
-                setSelectedSensorModuleObj(updatedSensorModuleObj);
-            },  (error: any): void => {
+                // TODO - Bill fix this
+                // setSelectedSensorModuleObj(updatedSensorModuleObj);
+            },    (error: any): void => {
                 alert('Unable to update device key value store');
                 consoleLog('Unable to update device key value store', error);
             });
@@ -1329,7 +1491,7 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
                                     onZoomAndPan={onZoomAndPanHandler}
                                     onFocusChanged={onChartFocusHandler}
                                 />
-                                {isLoadingTSData &&
+                                {sensorModuleStates.isLoadingTSData &&
                                     // If is loading details data, show an overlay on top of the chart to disable
                                     // the user from interacting with the chart
                                     <div
@@ -1365,10 +1527,12 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
         return (
             <Modal
                 title="Sensor Module Settings"
-                visible={settingsModalVisible}
+                visible={sensorModuleStates.editingModuleSettings}
                 onOk={handleSaveSensorModuleSettings}
                 onCancel={() => {
-                    setSettingsModalVisible(false);
+                    dispatch({
+                        type: 'HIDE_MODULE_SETTING'
+                    });
                 }}
             >
                 <div className="sensor-module-form">
@@ -1421,38 +1585,44 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
                 </NavLink>
                 <div className="module-container">
                     <div className="module-details row">
-                        {selectedModule && selectedSensorModuleObj ? (
+                        {sensorModuleStates.sensorModule ? (
                             <Fragment>
                                 <div
                                     className={'module-left-container d-flex flex-row align-items-center' +
-                                      (selectedModule &&
+                                      (sensorModuleStates.sensorModule &&
                                       evaluateSensorModelName(
-                                          parseSensorUUID(selectedModule).modelId
+                                          parseSensorUUID(sensorModuleStates.sensorModule.value.id).modelId
                                       ).includes('OMRON') ?
                                       ' extended col-12 col-xl-8' :
                                       ' col-12 col-xl-6 ')
                                     }
                                 >
-                                    <img src={evaluateSensorModelIcon(parseSensorUUID(selectedModule).modelId)} />
+                                    <img
+                                        src={evaluateSensorModelIcon(
+                                            parseSensorUUID(sensorModuleStates.sensorModule.value.id).modelId
+                                        )}
+                                    />
                                     <div
                                         className={
                                             'info-section d-flex flex-column align-items-start justify-content-center'
                                         }
                                     >
                                         <div className="device-name">
-                                        {selectedSensorModuleObj.value.name ?
-                                            selectedSensorModuleObj.value.name : selectedSensorModuleObj.value.id}
+                                        {sensorModuleStates.sensorModule.value.name ?
+                                            sensorModuleStates.sensorModule.value.name :
+                                            sensorModuleStates.sensorModule.value.id
+                                        }
                                         </div>
-                                        <div className="gateway-name">Gateway name: {selectedGateway}</div>
+                                        <div className="gateway-name">Gateway name: {sensorModuleStates.gatewayId}</div>
                                         <div className="sensor-model">
-                                        { selectedModule &&
-                                            `Sensor ID: ${selectedModule.split(':')[1]}`
+                                        { sensorModuleStates.sensorModule &&
+                                            `Sensor ID: ${sensorModuleStates.sensorModule.value.id.split(':')[1]}`
                                         }</div>
                                         <div className="sensor-model">
-                                        { selectedModule &&
-                                            `Sensor model: ${
-                                                evaluateSensorModelName(parseSensorUUID(selectedModule).modelId)
-                                            }`
+                                        { sensorModuleStates.sensorModule &&
+                                            `Sensor model: ${evaluateSensorModelName(
+                                                parseSensorUUID(sensorModuleStates.sensorModule.value.id).modelId
+                                            )}`
                                         }</div>
                                         <div className="sensor-count">Active Sensors: {activeSensorBundles.length}</div>
                                     </div>
@@ -1461,24 +1631,24 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
                                     </div>
                                     {
                                         // if the modal state is visible:
-                                        settingsModalVisible && renderSensorModuleSettingsModal()
+                                        sensorModuleStates.editingModuleSettings && renderSensorModuleSettingsModal()
                                     }
                                 </div>
                                 <div
                                     className={'data-cols d-flex flex-row' +
-                                        (selectedModule &&
+                                        (sensorModuleStates.sensorModule &&
                                         evaluateSensorModelName(
-                                            parseSensorUUID(selectedModule).modelId
+                                            parseSensorUUID(sensorModuleStates.sensorModule.value.id).modelId
                                         ).includes('OMRON') ?
                                         'col-12 col-xl-4' :
                                         'col-12 col-xl-6 ') +
-                                        (isLoadingTSData ? ' disable-control' : '')
+                                        (sensorModuleStates.isLoadingTSData ? ' disable-control' : '')
                                     }
                                 >
-                                    { selectedModule && selectedModule.split(':')[0] === '0101' &&
+                                    { sensorModuleStates.sensorModule.value.id.startsWith('0101') &&
                                     <div className="data-col">
                                         <div className="data-name col-dropdown">Sensing Interval</div>
-                                        {renderSensingIntervalOptions(selectedSensorModuleObj)}
+                                        {renderSensingIntervalOptions(sensorModuleStates.sensorModule)}
                                     </div>
                                     }
                                     <div className="data-col">
@@ -1508,7 +1678,7 @@ export const SensorModule = withRouter((props: SensorModuleProps & RouteComponen
                             })
                         ) : (
                             // if TSDB data DOES NOT exists
-                            (isLoadingPage || isLoadingTSData) ? (
+                            (sensorModuleStates.isLoadingPage || sensorModuleStates.isLoadingTSData) ? (
                                 <div className="sensor-data-loader">
                                     <img src={loader} />
                                 </div>
